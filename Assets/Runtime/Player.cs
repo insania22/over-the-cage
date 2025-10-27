@@ -1,4 +1,5 @@
-﻿using UnityEngine;
+﻿// Player.cs
+using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.Rendering;
 
