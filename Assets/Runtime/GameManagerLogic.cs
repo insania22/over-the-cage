@@ -1,220 +1,146 @@
-using UnityEngine;
+ï»¿using UnityEngine;
 
 public class GameManagerLogic : MonoBehaviour
 {
     public static GameManagerLogic Instance { get; private set; }
 
-    [Header("Debug")]
-    public bool verbose = true;
-
     [Header("Player / Teleport Target")]
-    public Player player; // Player.cs (¾Æ·¡) ¿ÀºêÁ§Æ®¸¦ Inspector¿¡ ¿¬°á ±ÇÀå
+    public Player player;
 
-    [Header("Spawn(ºÎÈ­Àå) ¼³Á¤")]
-    public Transform[] spawnPoints;          // 0,1,2¡¦ ºó ¿ÀºêÁ§Æ®¸¦ ¾À¿¡ µÎ°í ³Ö±â
-    public int defaultEggsPerCheckpoint = 3; // °¢ Ã¼Å©Æ÷ÀÎÆ® ÃÖÃÊ µµ´Ş ½Ã ¸®ÇÊ °³¼ö
+    [Header("Spawn Settings")]
+    public Transform[] spawnPoints;          // 0,1,2...
+    public int defaultEggsPerCheckpoint = 3; // ìƒˆ ì²´í¬í¬ì¸íŠ¸ ë„ë‹¬ ì‹œ ì•Œ ê°œìˆ˜
+    public float respawnLiftY = 0.2f;        // ë¦¬ìŠ¤í° ì‹œ ì‚´ì§ ë„ì›Œ ê²¹ì¹¨ ë°©ì§€
 
-    [Header("Ãß¶ô(°øÇã) ÆÇÁ¤")]
+    [Header("Void Kill")]
     public bool enableVoidKill = true;
     public float voidY = -50f;
 
-    [Header("Gate Suppress")]
-    [Tooltip("ÅÚ·¹Æ÷Æ® Á÷ÈÄ SpawnGate µî·ÏÀ» ¹«½ÃÇÏ´Â ½Ã°£(ÃÊ)")]
-    public float gateSuppressDuration = 0.5f;
-    private float _gateSuppressUntil = 0f;
+    [Header("BGM")]
+    public AudioSource bgmSource;
+    public AudioClip[] spawnBGMs; // ì¸ë±ìŠ¤ = ìŠ¤í° ì¸ë±ìŠ¤
+    public AudioClip deathBGM;    // ì‚¬ë§ ë¸Œê¸ˆ
+    public AudioClip deathSFX;    // ì‚¬ë§ íš¨ê³¼ìŒ
 
-    [Tooltip("ÅÚ·¹Æ÷Æ® ½Ã »ìÂ¦ À§·Î ¶ç¿ö Æ®¸®°Å °ãÄ§À» ÁÙÀÌ´Â ¿ÀÇÁ¼Â")]
-    public float respawnLiftY = 0.2f;
+    [Header("Death FX")]
+    public DeathEffectController deathFX;    // ì‚¬ë§ ì—°ì¶œ ì»¨íŠ¸ë¡¤ëŸ¬
 
     public int CurrentCheckpointIndex { get; private set; } = 0;
-    [SerializeField] private int[] eggsLeft;
 
-    private Transform _playerTransform;
+    private int[] eggsLeft;
+    private Transform _playerTr;
+    private bool _isDead = false;
 
     private void Awake()
     {
-        // Singleton
-        if (Instance != null && Instance != this)
-        {
-            if (verbose) Debug.LogWarning("[GameManager] Duplicate instance detected. Destroying this.");
-            Destroy(gameObject);
-            return;
-        }
+        if (Instance != null && Instance != this) { Destroy(gameObject); return; }
         Instance = this;
-        // DontDestroyOnLoad(this.gameObject); // ¾À ÀüÈ¯ º¸Á¸ÇÏ·Á¸é ÁÖ¼® ÇØÁ¦
 
-        // Player ÂüÁ¶
         if (player == null)
         {
             var go = GameObject.FindGameObjectWithTag("Player");
             if (go != null) player = go.GetComponent<Player>();
         }
-        if (player == null)
-        {
-            Debug.LogError("[GameManager] Player reference is NULL. Inspector¿¡ Player¸¦ ¿¬°áÇÏ°Å³ª Player ÅÂ±×¸¦ È®ÀÎÇÏ¼¼¿ä.");
-        }
-        else
-        {
-            _playerTransform = player.transform;
-        }
+        _playerTr = player ? player.transform : null;
 
-        // Spawn ÃÊ±âÈ­
-        if (spawnPoints == null || spawnPoints.Length == 0)
-        {
-            Debug.LogError("[GameManager] spawnPoints°¡ ºñ¾ú½À´Ï´Ù. ÃÖ¼Ò 1°³ ÀÌ»ó ÇÒ´çÇÏ¼¼¿ä.");
-            spawnPoints = new Transform[0];
-        }
+        if (spawnPoints == null) spawnPoints = new Transform[0];
         eggsLeft = new int[spawnPoints.Length];
-        for (int i = 0; i < eggsLeft.Length; i++)
-            eggsLeft[i] = defaultEggsPerCheckpoint;
+        for (int i = 0; i < eggsLeft.Length; i++) eggsLeft[i] = defaultEggsPerCheckpoint;
 
-        if (verbose) DumpState("Awake");
+        CurrentCheckpointIndex = 0;
+        PlayBGMForCheckpoint(0);
     }
 
     private void Update()
     {
-        if (!enableVoidKill || _playerTransform == null) return;
-
-        if (_playerTransform.position.y < voidY)
-        {
-            if (verbose) Debug.Log($"[GameManager] Void kill triggered at Y={_playerTransform.position.y} (thr={voidY})");
-            KillPlayer("VoidFall");
-        }
+        if (!enableVoidKill || _playerTr == null) return;
+        if (_playerTr.position.y < voidY) KillPlayer();
     }
 
-    // ===== ¿ÜºÎ¿¡¼­ È£ÃâÇÏ´Â API =====
-
-    /// ÅÚ·¹Æ÷Æ® Á÷ÈÄ SpawnGate µî·Ï Çã¿ë ¿©ºÎ
-    public bool CanAcceptCheckpointFromGate() => Time.time >= _gateSuppressUntil;
-
-    /// SpawnGate¿¡¼­ "¼º°ø µî·Ï"µÈ °æ¿ì¿¡¸¸ ¸®ÇÊ. °°Àº ½ºÆùÀ» ÀçÁøÀÔÇÏ¸é ¸®ÇÊ ¾øÀ½.
+    // ---------- Checkpoint ----------
     public void RegisterCheckpoint(int index)
     {
         if (!IsValidIndex(index)) return;
+        if (index == CurrentCheckpointIndex) return;   // ê°™ì€ ê³³ ì¬ì§„ì…ì€ ë¬´ì‹œ
 
-        // ÅÚ·¹Æ÷Æ® Á÷ÈÄ ¾ïÁ¦ ½Ã°£¿¡´Â ¹«½Ã
-        if (!CanAcceptCheckpointFromGate())
-        {
-            if (verbose) Debug.Log($"[GameManager] RegisterCheckpoint({index}) ignored (gate suppressed)");
-            return;
-        }
-
-        bool isSameAsCurrent = (index == CurrentCheckpointIndex);
-        if (!isSameAsCurrent)
-        {
-            CurrentCheckpointIndex = index;
-            eggsLeft[index] = defaultEggsPerCheckpoint; // ¡Ú »õ·Ó°Ô µµ´ŞÇßÀ» ¶§¸¸ ¸®ÇÊ
-            if (verbose) Debug.Log($"[GameManager] RegisterCheckpoint -> {index} (NEW). eggs reset to {eggsLeft[index]}");
-        }
-        else
-        {
-            if (verbose) Debug.Log($"[GameManager] RegisterCheckpoint -> {index} (same as current). NO refill.");
-        }
-
-        DumpState("RegisterCheckpoint");
+        CurrentCheckpointIndex = index;
+        eggsLeft[index] = defaultEggsPerCheckpoint;    // ìƒˆ ë„ë‹¬ ì‹œ ë¦¬í•„
+        PlayBGMForCheckpoint(index);
     }
 
-    /// Æ¯Á¤ ½ºÆùÀ¸·Î ÅÚ·¹Æ÷Æ®(ÇÊ¿ä ½Ã¸¸). ±âº»ÀûÀ¸·Î makeCurrent=false ±ÇÀå.
-    public void TeleportToSpawn(int index, bool makeCurrent = false, bool killVelocity = true)
+    // ---------- Death / Respawn ----------
+    public void KillPlayer()
     {
-        if (!IsValidIndex(index)) return;
-        if (makeCurrent) RegisterCheckpoint(index);
-
-        var basePos = spawnPoints[index].position;
-        var pos = basePos + Vector3.up * respawnLiftY; // °ãÄ§ ¹æÁö¿ë
-
-        TeleportToPosition(pos, killVelocity);
-
-        // ÅÚ·¹Æ÷Æ® ÀÌÈÄ Àá½Ã °ÔÀÌÆ® ¹«½Ã
-        SuppressGatesForAWhile();
-
-        if (verbose) Debug.Log($"[GameManager] TeleportToSpawn index={index}, makeCurrent={makeCurrent}, pos={pos}");
-    }
-
-    /// ¿ÜºÎ(´Ù¸¥ ½ºÅ©¸³Æ®)¿¡¼­ egg_spawn °ªÀ» Àû¿ëÇÏ°í ½ÍÀ» ¶§
-    public void ApplyExternalEggSpawn(int egg_spawn, bool teleport = true, bool makeCurrent = true)
-    {
-        if (!IsValidIndex(egg_spawn)) return;
-        if (makeCurrent) RegisterCheckpoint(egg_spawn);
-        if (teleport) TeleportToSpawn(egg_spawn, makeCurrent: false);
-        if (verbose) Debug.Log($"[GameManager] ApplyExternalEggSpawn({egg_spawn}) teleport={teleport}, makeCurrent={makeCurrent}");
-    }
-
-    /// »ç¸Á Ã³¸®: ÇöÀç Ã¼Å©Æ÷ÀÎÆ® ¾Ë Â÷°¨. 0ÀÌ¸é ÀÌÀü Ã¼Å©Æ÷ÀÎÆ®·Î ·Ñ¹é ÈÄ ±×°÷¿¡¼­ ºÎÈ°(¸®ÇÊ ¾øÀ½).
-    public void KillPlayer(string reason = "Unknown")
-    {
-        if (!IsValidIndex(CurrentCheckpointIndex))
-        {
-            Debug.LogWarning("[GameManager] KillPlayer: invalid CurrentCheckpointIndex.");
-            return;
-        }
+        if (_isDead) return;
+        _isDead = true;
 
         int cp = CurrentCheckpointIndex;
-        int before = eggsLeft[cp];
-
-        if (before > 0)
+        if (IsValidIndex(cp))
         {
-            eggsLeft[cp] = before - 1;
-            if (verbose) Debug.Log($"[GameManager] KillPlayer({reason}) -> CP {cp} eggs {before} -> {eggsLeft[cp]} (stay CP {cp})");
-            TeleportToSpawn(cp, makeCurrent: false);
+            int before = eggsLeft[cp];
+
+            if (before <= 1)
+            {
+                // ì´ë²ˆ ì£½ìŒìœ¼ë¡œ ì•Œì´ 0ì´ ë˜ë©´ ì¦‰ì‹œ ë¡¤ë°±
+                eggsLeft[cp] = 0;
+                CurrentCheckpointIndex = Mathf.Max(cp - 1, 0);
+            }
+            else
+            {
+                // ì•„ì§ 1ê°œ ì´ìƒ ë‚¨ìŒ â†’ í˜„ì¬ ìŠ¤í°ì—ì„œ ì•Œë§Œ ì¤„ì´ê³  ë¦¬ìŠ¤í°
+                eggsLeft[cp] = before - 1;
+            }
         }
-        else
+
+        StartDeathSequence(); // (ì—°ì¶œ â†’ TeleportToSpawn(CurrentCheckpointIndex) í˜¸ì¶œ)
+    }
+
+    private void StartDeathSequence()
+    {
+        // ì£½ìŒ ë¸Œê¸ˆ/íš¨ê³¼ìŒ
+        if (bgmSource)
         {
-            int prev = Mathf.Max(cp - 1, 0);
-            if (verbose) Debug.Log($"[GameManager] KillPlayer({reason}) -> eggs=0, rollback to CP {prev}");
-            CurrentCheckpointIndex = prev;                 // ¡Ú ÀÌÀü ½ºÆùÀ¸·Î ·Ñ¹é
-            TeleportToSpawn(prev, makeCurrent: false);     // ¡Ú °Å±â¼­ ºÎÈ° (¸®ÇÊ ¾øÀ½)
+            bgmSource.Stop();
+            if (deathBGM) { bgmSource.clip = deathBGM; bgmSource.loop = true; bgmSource.Play(); }
         }
+        if (deathSFX && _playerTr) AudioSource.PlayClipAtPoint(deathSFX, _playerTr.position);
 
-        DumpState("KillPlayer");
+        // ì‚¬ë§ ì—°ì¶œ â†’ ëë‚˜ë©´ OnDeathEffectFinished í˜¸ì¶œ
+        if (deathFX) deathFX.BeginDeathEffect(OnDeathEffectFinished);
+        else OnDeathEffectFinished();
     }
 
-    // ===== ³»ºÎ À¯Æ¿ =====
-
-    private void SuppressGatesForAWhile()
+    private void OnDeathEffectFinished()
     {
-        _gateSuppressUntil = Time.time + gateSuppressDuration;
+        // ì—°ì¶œ(ì•”ì „/ì™œê³¡) ì™„ë£Œ â†’ ìŠ¤í° ì´ë™
+        TeleportToSpawn(CurrentCheckpointIndex);
+        PlayBGMForCheckpoint(CurrentCheckpointIndex);
+
+        // ìŠ¤í° ì´ë™ì´ ëë‚œ ë’¤ í™”ë©´/ì¹´ë©”ë¼/ìŠ¤ì¼€ì¼ ë³µì› ì‹œì‘
+        if (deathFX) deathFX.StartRestore();
+
+        _isDead = false;
     }
 
-    private bool IsValidIndex(int index)
+    public void TeleportToSpawn(int index)
     {
-        bool ok = (index >= 0 && index < spawnPoints.Length && spawnPoints[index] != null);
-        if (!ok) Debug.LogWarning($"[GameManager] Invalid spawn index {index} (count={spawnPoints.Length}) or null Transform.");
-        return ok;
+        if (!IsValidIndex(index) || player == null) return;
+        var pos = spawnPoints[index].position + Vector3.up * respawnLiftY;
+        player.Teleport(pos);
     }
 
-    private void TeleportToPosition(Vector3 pos, bool killVelocity)
+    // ---------- Utils ----------
+    private bool IsValidIndex(int i) => (i >= 0 && i < spawnPoints.Length && spawnPoints[i] != null);
+
+    private void PlayBGMForCheckpoint(int index)
     {
-        if (player == null)
-        {
-            Debug.LogError("[GameManager] Teleport failed: Player is null");
-            return;
-        }
-        player.Teleport(pos); // Player ¡æ PlayerCharacter.SetPosition È£Ãâ
-        if (verbose) Debug.Log($"[GameManager] TeleportToPosition {pos} (killVelocity={killVelocity})");
+        if (!bgmSource || spawnBGMs == null) return;
+        if (index < 0 || index >= spawnBGMs.Length) return;
+        var clip = spawnBGMs[index];
+        if (!clip) return;
+        if (bgmSource.clip == clip && bgmSource.isPlaying) return;
+        bgmSource.clip = clip;
+        bgmSource.loop = true;
+        bgmSource.Play();
     }
-
-    private void DumpState(string where)
-    {
-        if (!verbose) return;
-        string eggs = (eggsLeft != null) ? string.Join(",", eggsLeft) : "(null)";
-        Debug.Log($"[GameManager] [{where}] CP={CurrentCheckpointIndex}, eggs=[{eggs}], spawns={spawnPoints.Length}");
-    }
-
-#if UNITY_EDITOR
-    private void OnDrawGizmos()
-    {
-        if (spawnPoints == null) return;
-        for (int i = 0; i < spawnPoints.Length; i++)
-        {
-            var t = spawnPoints[i];
-            if (t == null) continue;
-
-            Gizmos.color = (i == CurrentCheckpointIndex) ? Color.green : Color.cyan;
-            Gizmos.DrawSphere(t.position + Vector3.up * 0.2f, 0.25f);
-            UnityEditor.Handles.color = Gizmos.color;
-            UnityEditor.Handles.Label(t.position + Vector3.up * 0.8f, $"Spawn[{i}]");
-        }
-    }
-#endif
 }

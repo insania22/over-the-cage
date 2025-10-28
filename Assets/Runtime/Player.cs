@@ -35,6 +35,7 @@ public class Player : MonoBehaviour
 
     void Update()
     {
+
         var input = _inputActions.Gameplay;
         var deltaTime = Time.deltaTime;
 
@@ -67,13 +68,12 @@ public class Player : MonoBehaviour
         if (Keyboard.current != null && Keyboard.current.hKey.wasPressedThisFrame)
             playerCamera.CycleView();
 
-        // T: 자살(끼임 방지)
+        // ...
         if (Keyboard.current != null && Keyboard.current.tKey.wasPressedThisFrame)
         {
-            Debug.Log("[Player] T pressed (Suicide)");
-            if (GameManagerLogic.Instance != null)
-                GameManagerLogic.Instance.KillPlayer("Suicide");
+            GameManagerLogic.Instance.KillPlayer();
         }
+
     }
 
     void LateUpdate()
