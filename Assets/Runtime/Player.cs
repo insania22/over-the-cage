@@ -63,10 +63,16 @@ public class Player : MonoBehaviour
         playerCharacter.UpdateInput(characterInput);
         playerCharacter.UpdateBody(deltaTime);
 
-        // H: 시점 순환 (뒤→앞→1인칭)
+        // H: 시점 순환
         if (Keyboard.current != null && Keyboard.current.hKey.wasPressedThisFrame)
-        {
             playerCamera.CycleView();
+
+        // T: 자살(끼임 방지)
+        if (Keyboard.current != null && Keyboard.current.tKey.wasPressedThisFrame)
+        {
+            Debug.Log("[Player] T pressed (Suicide)");
+            if (GameManagerLogic.Instance != null)
+                GameManagerLogic.Instance.KillPlayer("Suicide");
         }
     }
 
