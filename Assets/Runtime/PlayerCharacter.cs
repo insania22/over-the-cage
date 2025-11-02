@@ -47,6 +47,12 @@ public class PlayerCharacter : MonoBehaviour, ICharacterController
     [SerializeField] private float walkResponse = 25f;
     [SerializeField] private float crouchResponse = 25f;
 
+    [Header("Directional Speed Multipliers")] // 🛑 추가: 앞뒤좌우 속도 배율
+    [Range(0.0f, 1.0f)]
+    [SerializeField] private float backwardSpeedMultiplier = 0.5f; // 뒤로 이동 시 속도 배율
+    [Range(0.0f, 1.0f)]
+    [SerializeField] private float sidewaysSpeedMultiplier = 0.7f; // 좌우 이동 시 속도 배율
+
     [Header("Air Settings")]
     [SerializeField] private float airSpeed = 15f;
     [SerializeField] private float airAcceleration_Default = 70f;
@@ -65,11 +71,11 @@ public class PlayerCharacter : MonoBehaviour, ICharacterController
     [SerializeField] private float slideSteer_Default = 6f;
     [SerializeField] private float slideFriction_Ice = 0.03f;
     [SerializeField] private float slideSteer_Ice = 10f;
+    [SerializeField] private float autoSlideSpeedThreshold = 25f;
 
     [Header("Ice Settings")]
     [SerializeField] private float iceSlideBoost = 5f;
     [SerializeField] private float iceSteerMultiplier = 1.3f;
-    [SerializeField] private float autoSlideSpeedThreshold = 25f;
     [SerializeField] private float iceWalkAcceleration = 4f;
     [SerializeField] private float iceSlideGravity = 6f;
 
