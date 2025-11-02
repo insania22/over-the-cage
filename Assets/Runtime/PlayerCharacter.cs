@@ -139,6 +139,8 @@ public class PlayerCharacter : MonoBehaviour, ICharacterController
             _requestedCrouchInAir = !_state.Grounded;
         else if (!_requestedCrouch && wasRequestedCrouch)
             _requestedCrouchInAir = false;
+
+        
     }
 
     public void UpdateBody(float deltaTime)
