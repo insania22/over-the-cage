@@ -1,4 +1,5 @@
 ﻿using UnityEngine;
+using UnityEngine.SceneManagement;
 
 public class GameManagerLogic : MonoBehaviour
 {
@@ -55,6 +56,15 @@ public class GameManagerLogic : MonoBehaviour
     {
         if (!enableVoidKill || _playerTr == null) return;
         if (_playerTr.position.y < voidY) KillPlayer();
+    }
+
+    public void StartOutroSequence()
+    {
+        Debug.Log("Outro 시퀀스 시작! OutroAnimationScene으로 전환을 준비합니다.");
+        // 게임 시간이 0으로 정지되어 있을 수도 있으니 씬 전환 전에 시간 스케일을 1로 되돌립니다.
+        Time.timeScale = 1f;
+
+        SceneTransitionManager.LoadScene("OutroAnimationScene");
     }
 
     // ---------- Checkpoint ----------

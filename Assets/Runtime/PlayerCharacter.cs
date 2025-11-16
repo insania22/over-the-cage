@@ -32,6 +32,7 @@ public class PlayerCharacter : MonoBehaviour, ICharacterController
     [SerializeField] private KinematicCharacterMotor motor;
     [SerializeField] private Transform root;
     [SerializeField] private Transform cameraTarget;
+    // [SerializeField] private Animator characterAnimator; // 요청에 따라 제외됨
 
     public KinematicCharacterMotor Motor => motor;
 
@@ -46,8 +47,10 @@ public class PlayerCharacter : MonoBehaviour, ICharacterController
     [SerializeField] private float crouchSpeed = 7f;
     [SerializeField] private float walkResponse = 25f;
     [SerializeField] private float crouchResponse = 25f;
+    [SerializeField] private float normalDeceleration = 20f; // 🛑 추가: 입력 없을 때 지상 감속 속도
 
-    [Header("Directional Speed Multipliers")] // 🛑 추가: 앞뒤좌우 속도 배율
+    // 🛑 추가된 부분: 앞뒤좌우 속도 배율 🛑
+    [Header("Directional Speed Multipliers")]
     [Range(0.0f, 1.0f)]
     [SerializeField] private float backwardSpeedMultiplier = 0.5f; // 뒤로 이동 시 속도 배율
     [Range(0.0f, 1.0f)]
@@ -57,6 +60,7 @@ public class PlayerCharacter : MonoBehaviour, ICharacterController
     [SerializeField] private float airSpeed = 15f;
     [SerializeField] private float airAcceleration_Default = 70f;
     [SerializeField] private float airAcceleration_Ice = 110f;
+    // [SerializeField] private float airDrag = 5f; // 요청에 따라 제외됨
 
     [Header("Jump Settings")]
     [SerializeField] private float jumpSpeed = 20f;
@@ -71,7 +75,7 @@ public class PlayerCharacter : MonoBehaviour, ICharacterController
     [SerializeField] private float slideSteer_Default = 6f;
     [SerializeField] private float slideFriction_Ice = 0.03f;
     [SerializeField] private float slideSteer_Ice = 10f;
-    [SerializeField] private float autoSlideSpeedThreshold = 25f;
+    [SerializeField] private float autoSlideSpeedThreshold = 25f; // 원래 코드에 존재
 
     [Header("Ice Settings")]
     [SerializeField] private float iceSlideBoost = 5f;
@@ -106,13 +110,16 @@ public class PlayerCharacter : MonoBehaviour, ICharacterController
     private Collider[] _uncrouchOverlapResults;
     private bool _alignToCamera;   // ★
 
-    // 슬라이드 저속 유지 시 강제 종료용
+    // 슬라이드 저속 유지 시 강제 종료용 (원래 코드에 존재)
     private float _slideLowSpeedTimer = 0f;
-    [SerializeField] private float slideLowSpeedHold = 0.20f; // 저속 유지 시간(초)
-    [SerializeField] private float shallowSlopeEps = 0.12f;   // 얕은 경사(sinθ) 기준
+    [SerializeField] private float slideLowSpeedHold = 0.20f;
+    [SerializeField] private float shallowSlopeEps = 0.12f;
 
-    // slide 태그 충돌 시 다음 프레임에 슬라이드 강제 진입하기 위한 플래그
+    // slide 태그 충돌 시 다음 프레임에 슬라이드 강제 진입하기 위한 플래그 (원래 코드에 존재)
     private bool _forceSlideByTagPending = false;
+
+    // 슬라이드 쿨타임 관련 변수는 요청에 따라 제외됨
+
 
     public void Initinalize()
     {
@@ -120,7 +127,7 @@ public class PlayerCharacter : MonoBehaviour, ICharacterController
         _lastState = _state;
         _uncrouchOverlapResults = new Collider[8];
         motor.CharacterController = this;
-        StartCoroutine(ForceDoubleCtrlWithDelay());
+        StartCoroutine(ForceDoubleCtrlWithDelay()); // 원래 코드에 있던 그대로 유지
     }
 
     public void UpdateInput(CharacterInput input)
@@ -169,13 +176,15 @@ public class PlayerCharacter : MonoBehaviour, ICharacterController
     {
         _state.Acceleration = Vector3.zero;
 
+        // 슬라이드 쿨타임 로직은 요청에 따라 제외됨
+
         if (motor.GroundingStatus.IsStableOnGround)
         {
             _timeSinceUngrounded = 0f;
             _ungroundedDueToJump = false;
 
             var groundedMovement = motor.GetDirectionTangentToSurface(_requestedMovement, motor.GroundingStatus.GroundNormal) * _requestedMovement.magnitude;
-            bool isRunning = currentVelocity.magnitude > (walkSpeed * 0.5f);
+            bool isRunning = currentVelocity.magnitude > (walkSpeed * 0.5f); // 원래 코드에 있던 그대로 유지
 
             // 현재 수평 속도
             float planarSpeed = Vector3.ProjectOnPlane(currentVelocity, motor.CharacterUp).magnitude;
@@ -196,28 +205,68 @@ public class PlayerCharacter : MonoBehaviour, ICharacterController
                 ForceSlide(ref currentVelocity);
             }
 
+            // 크라우치 버튼 눌렀을 때 슬라이드
             if (_requestedCrouch && !_requestedJump && _state.Stance != Stance.Slide)
             {
                 if (isRunning) StartSlide(ref currentVelocity, groundedMovement);
                 else StartCrouchOnly();
             }
 
+            // 🛑 ⬇️ 여기부터 앞뒤좌우 속도 차이 로직입니다. ⬇️ 🛑
             if (_state.Stance == Stance.Stand || _state.Stance == Stance.Crouch)
             {
                 float speed = _state.Stance == Stance.Stand ? walkSpeed : crouchSpeed;
                 float response = _state.Stance == Stance.Stand ? walkResponse : crouchResponse;
 
-                var targetVelocity = groundedMovement * speed;
-                var moveVelocity = Vector3.Lerp(currentVelocity, targetVelocity, 1f - Mathf.Exp(-response * deltaTime));
-                _state.Acceleration = moveVelocity - currentVelocity;
-                currentVelocity = moveVelocity;
+                if (_requestedMovement.sqrMagnitude > 0.01f) // 입력이 있을 때
+                {
+                    Vector3 localGroundedMove = Quaternion.Inverse(motor.transform.rotation) * groundedMovement;
+
+                    // ====== ★ 앞뒤좌우 움직일 때 속도 감소 구현 ★ ======
+                    float forwardSpeed = localGroundedMove.z > 0 // 전방 이동 (z축 양수)
+                        ? localGroundedMove.z * speed
+                        : localGroundedMove.z * speed * backwardSpeedMultiplier; // 뒤로 이동 (z축 음수) 시 배율 적용
+
+                    float sidewaysSpeed = localGroundedMove.x * speed * sidewaysSpeedMultiplier; // 좌우 이동 (x축) 시 배율 적용
+
+                    Vector3 scaledLocalMove = new Vector3(sidewaysSpeed, 0, forwardSpeed);
+                    // ===============================================
+
+                    var targetVelocity = motor.transform.rotation * scaledLocalMove;
+                    var moveVelocity = Vector3.Lerp(currentVelocity, targetVelocity, 1f - Mathf.Exp(-response * deltaTime));
+                    _state.Acceleration = moveVelocity - currentVelocity;
+                    currentVelocity = moveVelocity;
+                }
+                else // 🛑 입력이 없을 때 (지상 감속 로직) 🛑
+                {
+                    float currentHorizontalSpeedMagnitude = new Vector3(currentVelocity.x, 0f, currentVelocity.z).magnitude;
+                    if (currentHorizontalSpeedMagnitude > 0.01f) // 아주 느린 속도라도 남아있다면 감속 적용
+                    {
+                        Vector3 frictionVelocity = Vector3.Lerp(currentVelocity, Vector3.zero, normalDeceleration * deltaTime);
+                        currentVelocity.x = frictionVelocity.x;
+                        currentVelocity.z = frictionVelocity.z;
+
+                        if (Mathf.Abs(currentVelocity.x) < 0.01f && Mathf.Abs(currentVelocity.z) < 0.01f)
+                        {
+                            currentVelocity.x = 0f;
+                            currentVelocity.z = 0f;
+                        }
+                    }
+                    else
+                    {
+                        currentVelocity.x = 0f;
+                        currentVelocity.z = 0f;
+                    }
+                    _state.Acceleration = -currentVelocity / deltaTime;
+                }
             }
+            // 🛑 ⬆️ 여기까지 앞뒤좌우 속도 차이 로직입니다. ⬆️ 🛑
             else if (_state.Stance == Stance.Slide)
             {
                 _requestedCrouch = true;
 
                 // --- 경사/방향 ---
-                var up = motor.transform.up;
+                var up = motor.CharacterUp;
                 float slopeAngleDeg = Vector3.Angle(motor.GroundingStatus.GroundNormal, up);
                 float slopeValue = Mathf.Sin(slopeAngleDeg * Mathf.Deg2Rad); // 0~1
                 bool isFlat = slopeValue < flatSlopeEps;
@@ -240,7 +289,6 @@ public class PlayerCharacter : MonoBehaviour, ICharacterController
 
                 if (slopeCoeff > 0f && slopeValue > 0f)
                 {
-                    // "아주 얕은 내리막 + 저속"이면 가속 차단해 잔여 관성으로 멈추게 함
                     bool shallowAndSlow = (slopeValue < shallowSlopeEps) && (velMag < slideEndSpeed * 1.25f);
 
                     if (signed > 0f)
@@ -251,16 +299,12 @@ public class PlayerCharacter : MonoBehaviour, ICharacterController
                             deltaSpeed = slopeCoeff * slopeValue * mul * deltaTime;
                         }
                     }
-                    else if (signed < 0f)
-                    {
-                        if (!fast)
-                            deltaSpeed = -(slopeCoeff * slopeValue * 1.8f) * deltaTime; // 느릴 땐 오르막 감속
-                        // fast면 0 (오르막 감속 없음)
-                    }
-                    else
+                    else // signed < 0f (오르막)
                     {
                         if (!shallowAndSlow)
-                            deltaSpeed = 0.35f * slopeCoeff * slopeValue * deltaTime;
+                            deltaSpeed = 0.35f * slopeCoeff * slopeValue * deltaTime; // 얕은 오르막 감속 비율
+                        else if (!fast)
+                            deltaSpeed = -(slopeCoeff * slopeValue * 1.8f) * deltaTime; // 느릴 땐 오르막 감속
                     }
                 }
 
@@ -282,13 +326,11 @@ public class PlayerCharacter : MonoBehaviour, ICharacterController
                 float friction = isOnIce ? slideFriction_Ice : slideFriction_Default;
                 if (fast)
                 {
-                    // 빠를 때는 평지에서만 마찰 감속
                     if (isFlat)
                         currentVelocity *= Mathf.Exp(-friction * deltaTime);
                 }
                 else
                 {
-                    // 느릴 때는 항상 마찰 적용
                     currentVelocity *= Mathf.Exp(-friction * deltaTime);
                 }
 
@@ -302,8 +344,7 @@ public class PlayerCharacter : MonoBehaviour, ICharacterController
                 bool uphillNow = signed < 0f;
                 bool tooSlow = currentVelocity.magnitude < slideEndSpeed;
 
-                if ((tooSlow && (isFlat || uphillNow)) ||
-                    (_slideLowSpeedTimer >= slideLowSpeedHold))
+                if ((tooSlow && (isFlat || uphillNow)) || (_slideLowSpeedTimer >= slideLowSpeedHold))
                 {
                     _state.Stance = Stance.Stand;
                     _requestedCrouch = false;
@@ -313,10 +354,19 @@ public class PlayerCharacter : MonoBehaviour, ICharacterController
                 }
             }
         }
-        else
+        else // 🛑 공중에 있을 때 🛑
         {
             _timeSinceUngrounded += deltaTime;
 
+            // 중력 적용
+            float effectiveGravity = gravity;
+            float verticalSpeed = Vector3.Dot(currentVelocity, motor.CharacterUp);
+            if (_requestedSustainedJump && verticalSpeed > 0f)
+                effectiveGravity *= jumpSustainGravity;
+
+            currentVelocity += motor.CharacterUp * effectiveGravity * deltaTime;
+
+            // 공중 수평 이동 로직
             if (_requestedMovement.sqrMagnitude > 0f)
             {
                 var planarMovement = Vector3.ProjectOnPlane(_requestedMovement, motor.CharacterUp) * _requestedMovement.magnitude;
@@ -339,12 +389,7 @@ public class PlayerCharacter : MonoBehaviour, ICharacterController
                 currentVelocity += movementForce;
             }
 
-            float effectiveGravity = gravity;
-            float verticalSpeed = Vector3.Dot(currentVelocity, motor.CharacterUp);
-            if (_requestedSustainedJump && verticalSpeed > 0f)
-                effectiveGravity *= jumpSustainGravity;
-
-            currentVelocity += motor.CharacterUp * effectiveGravity * deltaTime;
+            // 공중 저항 (Drag) 로직은 요청에 따라 제외됨
         }
 
         // 점프
@@ -390,7 +435,7 @@ public class PlayerCharacter : MonoBehaviour, ICharacterController
 
         if (isOnIce) currentVelocity += slideDir * iceSlideBoost;
 
-        //motor.SetCapsuleDimensions(motor.Capsule.radius, crouchHeight, crouchHeight * 0.5f);
+        // motor.SetCapsuleDimensions(motor.Capsule.radius, crouchHeight, crouchHeight * 0.5f);
     }
 
     // ★ 강제 슬라이드 진입(현재 속도로)
@@ -420,6 +465,7 @@ public class PlayerCharacter : MonoBehaviour, ICharacterController
         }
     }
 
+    // 🛑 구현된 ICharacterController 인터페이스 멤버들 시작 🛑
     public void UpdateRotation(ref Quaternion currentRotation, float deltaTime)
     {
         if (_alignToCamera)
@@ -430,15 +476,7 @@ public class PlayerCharacter : MonoBehaviour, ICharacterController
         }
         else
         {
-            // 필요 시 이동 방향 보간
-            /*
-            var velPlanar = Vector3.ProjectOnPlane(motor.Velocity, motor.CharacterUp);
-            if (velPlanar.sqrMagnitude > 0.01f)
-            {
-                var target = Quaternion.LookRotation(velPlanar.normalized, motor.CharacterUp);
-                currentRotation = Quaternion.Slerp(currentRotation, target, 1f - Mathf.Exp(-8f * deltaTime));
-            }
-            */
+            // 이동 방향 보간 로직 (원래 코드에 주석 처리)
         }
     }
 
@@ -463,10 +501,12 @@ public class PlayerCharacter : MonoBehaviour, ICharacterController
             if (motor.CharacterOverlap(pos, rot, _uncrouchOverlapResults, mask, QueryTriggerInteraction.Ignore) > 0)
             {
                 _requestedCrouch = true;
+                _state.Stance = Stance.Crouch;
                 motor.SetCapsuleDimensions(motor.Capsule.radius, crouchHeight, crouchHeight * 0.5f);
             }
         }
 
+        // characterAnimator 관련 로직은 요청에 따라 제외됨
         _state.Grounded = motor.GroundingStatus.IsStableOnGround;
         _state.Velocity = motor.Velocity;
         _lastState = _tempState;
@@ -477,7 +517,6 @@ public class PlayerCharacter : MonoBehaviour, ICharacterController
         int layer = hitCollider.gameObject.layer;
         isOnIce = layer == LayerMask.NameToLayer("ice");
 
-        // ★ slide 태그 바닥에 닿았을 때: 다음 프레임에 강제 슬라이드 진입 예약
         if (hitCollider.CompareTag("slide"))
         {
             _forceSlideByTagPending = true;
@@ -487,9 +526,8 @@ public class PlayerCharacter : MonoBehaviour, ICharacterController
     public void OnMovementHit(Collider hitCollider, Vector3 hitNormal, Vector3 hitPoint, ref HitStabilityReport hitStabilityReport)
     {
         if (hitCollider.CompareTag("Finish"))
-            SceneManager.LoadScene("normal_end");
+            SceneManager.LoadScene("OutroAnimationScene");
 
-        // ★ 옆면/전면 충돌이라도 태그가 slide면 예약
         if (hitCollider.CompareTag("slide"))
         {
             _forceSlideByTagPending = true;
@@ -499,6 +537,7 @@ public class PlayerCharacter : MonoBehaviour, ICharacterController
     public bool IsColliderValidForCollisions(Collider coll) => true;
     public void OnDiscreteCollisionDetected(Collider hitCCollider) { }
     public void ProcessHitStabilityReport(Collider hitCollider, Vector3 hitNormal, Vector3 hitPoint, Vector3 atCharacterPosition, Quaternion atCharacterRotation, ref HitStabilityReport hitStabilityReport) { }
+    // 🛑 구현된 ICharacterController 인터페이스 멤버들 끝 🛑
 
     public Transform GetCameraTarget() => cameraTarget;
     public CharacterState GetState() => _state;
